@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: supermarket-pg-week2
+    environment:
+      POSTGRES_DB: supermarket
+      POSTGRES_USER: supermarket
+      POSTGRES_PASSWORD: supermarket
+    # Host port 5433 so week 1's stack (5432) can stay up alongside this one.
+    ports:
+      - "5433:5432"
+    volumes:
+      - supermarket-pgdata-week2:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U supermarket -d supermarket"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  supermarket-pgdata-week2:

@@ -16,11 +16,20 @@ self-checkout-project/
 │   ├── src/*.java                   ← the load-testing client (zero dependencies)
 │   ├── build.sh
 │   └── run.sh
-└── mockserver/
-    ├── MockServer.java              ← optional reference server (see below)
-    ├── build.sh
-    └── run.sh
+├── mockserver/
+│   ├── MockServer.java              ← optional reference server (see below)
+│   ├── build.sh
+│   └── run.sh
+└── week1-monolith/                  ← weekly implementation (one dir per week)
+    ├── src/…                        ← Spring Boot layered monolith
+    ├── README.md                    ← how to build/run + this week's results
+    └── ARCHITECTURE.md              ← characteristics, trade-offs, evidence
 ```
+
+Each week adds one implementation directory (`week1-monolith/`, `week2-…/`, …).
+Every one satisfies the same `spec/` contract and is driven by the same
+`load-client/`; only the internal architecture changes. See
+[Weekly implementations](#weekly-implementations) below for the current list.
 
 ## The API contract (`spec/self-checkout-openapi.yaml`)
 
@@ -132,9 +141,21 @@ cd mockserver
 
 ## The concurrency gotcha
 
-With 10+ stations completing transactions concurrently against the sameinventory, a naive "read stock, check it, then write stock minus one" doneas two separate steps (a read call followed by a write call, or even twonon-atomic statements against a shared database row without appropriatelocking) can let two stations both succeed in buying the last unit of anitem. In the monolith and layered weeks this is easy to get right byaccident, because it's all one process talking to one local transaction. Itgets *much* easier to get wrong once inventory becomes its own service(service-based, microservices) and the check-then-decrement happens acrossa network call.
+With 10+ stations completing transactions concurrently against the same
+inventory, a naive "read stock, check it, then write stock minus one" done as
+two separate steps (a read call followed by a write call, or even two
+non-atomic statements against a shared database row without appropriate
+locking) can let two stations both succeed in buying the last unit of an item.
+In the monolith and layered weeks this is easy to get right by accident,
+because it's all one process talking to one local transaction. It gets *much*
+easier to get wrong once inventory becomes its own service (service-based,
+microservices) and the check-then-decrement happens across a network call.
 
-Suggested correctness check for grading, independent of any performancenumber: **for every SKU, `initial_stock - final_stock` must equal the totalnumber of completed-transaction line items for that SKU, and final stockmust never go negative.** A student's implementation can pass everyfunctional test and still fail this invariant under load — that's thepoint.
+Suggested correctness check for grading, independent of any performance
+number: **for every SKU, `initial_stock - final_stock` must equal the total
+number of completed-transaction line items for that SKU, and final stock must
+never go negative.** A student's implementation can pass every functional test
+and still fail this invariant under load — that's the point.
 
 
 
@@ -149,4 +170,12 @@ Submit the timestamped JSON report for each architecture in a
 - Does the popular-items ranking stay stable across implementations (it
   should — it's testing the analytics feature, not the architecture)?
 
+## Weekly implementations
+
+| Week | Directory                            | Architecture     | Status    |
+| ---- | ------------------------------------ | ---------------- | --------- |
+| 1    | [`week1-monolith/`](week1-monolith/) | Layered monolith (Spring Boot + PostgreSQL) | Complete — see its [README](week1-monolith/README.md) and [ARCHITECTURE.md](week1-monolith/ARCHITECTURE.md) |
+| 2    | [`week2-layered/`](week2-layered/)   | Layered architecture, boundaries enforced by ArchUnit (Spring Boot + PostgreSQL) | Complete — see its [README](week2-layered/README.md) and [ARCHITECTURE.md](week2-layered/ARCHITECTURE.md) |
+
+Add a row here each week a new implementation directory lands.
 
