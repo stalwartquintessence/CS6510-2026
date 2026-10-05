@@ -112,6 +112,10 @@ cd ../load-client && ./build.sh
 Both reports are in `reports/`: `report-20260925-231818.json` (default) and
 `report-20260925-232154.json` (stress). Week 1's figures are from its own committed reports.
 
+The two `report-20261005-*.json` files are later re-runs of this same code (default, and
+100 stations × 120 s), made as a same-session baseline for week 3 — see
+[`week3-pipeline/README.md`](../week3-pipeline/README.md#results-this-machine).
+
 ### Default mode — 10 stations, 60 s
 
 | Metric | Week 1 | Week 2 |

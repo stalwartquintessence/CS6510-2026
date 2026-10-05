@@ -23,8 +23,16 @@ them.
 - `mockserver/` — a deliberately uninteresting reference implementation of the contract (a few
   `ConcurrentHashMap`s behind `com.sun.net.httpserver`), useful for exercising the load client
   before a real week's implementation exists. Not an example of good architecture.
-- `week1-monolith/` — Week 1: layered Spring Boot monolith + PostgreSQL. Later weeks add sibling
-  directories, each with their own README/ARCHITECTURE.md and build tooling.
+- `week1-monolith/` — Week 1: layered Spring Boot monolith + PostgreSQL.
+- `week2-layered/` — Week 2: the same monolith with four explicit layers over a `domain` kernel,
+  boundaries enforced by ArchUnit (`src/test/.../architecture/LayeredArchitectureTest.java`).
+- `week3-pipeline/` — Week 3: week 2 with the popular-items analytics rebuilt as pipes and filters
+  (Window → Rank → Enrich → Publish, one thread each, `BlockingQueue` pipes).
+
+Each week is a self-contained Maven project with its own README/ARCHITECTURE.md, `mvnw`,
+`docker-compose.yml` and `reports/`. Week N+1 starts as a copy of week N, and only the part under
+study changes. Runtime tuning (Hikari 50, Tomcat 200, window 1000/500, catalog 2000 × 10 000) is
+held constant so week-over-week numbers stay comparable.
 
 ## Common commands
 
@@ -41,8 +49,13 @@ cd load-client
 
 Key flags: `--baseUrl`, `--stations` (default 10), `--duration` (seconds, default 60),
 `--minItems`/`--maxItems`, `--popularLimit`, `--requestTimeout`, `--verbose`, `--reportDir`.
-"Stress mode" is just a larger `--stations` (e.g. `--stations=200 --duration=180`) — meaningful
-mainly for weeks where scalability differences between architecture styles are the point.
+"Stress mode" is just a larger `--stations`. Weeks 1–2 used `--stations=200 --duration=180`; the
+week 3 assignment specifies `--stations=100 --duration=120`. Check each week's assignment text, and
+re-run the previous week at the same load if it changed, so the comparison is like-for-like.
+
+Run-to-run noise is large: the same jar has varied by ~25% between a run on a cold Docker VM and one
+ten minutes later. Warm Docker up before measuring, compare against same-session baselines, and
+don't report single-digit-percent differences as real effects.
 
 ### Mock reference server (`mockserver/`)
 
@@ -64,11 +77,24 @@ java -jar target/week1-monolith-1.0.0.jar     # run (or: ./mvnw spring-boot:run)
 docker compose down -v               # reset stock for a fresh run (re-seeds on empty DB)
 ```
 
-There are no test classes in `week1-monolith/src` yet — `mvnw -DskipTests` is used deliberately,
-and `mvnw test` will currently just run an empty test phase.
+There are no test classes in `week1-monolith/src` — `mvnw test` just runs an empty test phase.
 
-Drive it with the load client from the repo root (see above), pointing `--reportDir` at
-`week1-monolith/reports` so results land alongside that week's other reports.
+### Weeks 2 and 3 (`week2-layered/`, `week3-pipeline/`)
+
+Same commands as week 1, from the week's own directory. Postgres host ports differ so containers can
+coexist: week 1 `supermarket-pg` on 5432, week 2 `supermarket-pg-week2` on 5433, week 3
+`supermarket-pg-week3` on 5434. The app is always on 8080, so run one week's server at a time.
+
+`./mvnw test` is meaningful from week 2 on: week 2 has 7 ArchUnit layer rules; week 3 adds 3
+pipeline rules (`PipelineArchitectureTest`) and 5 threaded pipeline tests
+(`ScanAnalyticsPipelineTest`), 15 in total. If a build produces a tiny jar or "Unable to find main
+class", `target/` is stale — use `./mvnw clean package`.
+
+The catalog seeder is a `CommandLineRunner` and finishes just after the port opens; wait for
+`Seeded catalog: 2000 items` in the log before starting load.
+
+Drive any week with the load client from the repo root (see above), pointing `--reportDir` at that
+week's `reports/` directory.
 
 Correctness invariant to check after any load run (independent of any performance number): for
 every SKU, `initial_stock - final_stock` must equal completed-transaction units sold, and final
@@ -139,6 +165,29 @@ Connection pool (HikariCP, 50 connections) and Tomcat thread pool (200) are the 
 ceiling of this implementation; both are tuned in `application.properties` alongside the
 catalog-seeding and analytics-window defaults (`supermarket.catalog.*`,
 `supermarket.inventory.low-stock-threshold`, `supermarket.analytics.*`).
+
+### Week 2 layered internals (`week2-layered/`)
+
+Packages `api/` (controllers, DTOs, mappers, the only HTTP code), `transaction/` (checkout, plus
+`catalog/` and `inventory/` submodules), `analytics/`, `persistence/` (DAO ports `ItemDao`,
+`TransactionDao` and `PopularItemsDao`; entities; package-private Spring Data repositories) and
+`domain/` (`Basket`, `ItemSnapshot`, domain errors; depends on nothing). Interfaces sit at every
+boundary, with package-private implementations. Concurrency control is identical to week 1, except
+that `InventoryService.decrement` is `Propagation.MANDATORY`.
+
+### Week 3 pipeline internals (`week3-pipeline/`)
+
+Only `analytics/` differs from week 2:
+
+- `analytics/pipeline/` is a generic framework (`Pipe`, `Stage`, `Filter`, `Sink`) that depends
+  only on the JDK.
+- The concrete stages `WindowFilter`, `RankFilter`, `EnrichFilter` and `PublishSink`, plus their
+  immutable message records, are package-private in `analytics/`.
+- `ScanAnalyticsPipeline` (`SmartLifecycle`, phase 0) wires the pipes and owns the threads.
+- `DefaultAnalyticsService.recordScan` is a non-blocking `offer()`; `getPopular` serves the
+  in-memory `PublishedRanking`.
+- The pipe after Window is conflating (capacity 1, latest wins), so a slow DB write can never
+  back up into the scan pipe.
 
 Each week's `README.md` documents how to build/run and that week's load-test results; each week's
 `ARCHITECTURE.md` documents its architectural characteristics, trade-offs, and evidence — read
