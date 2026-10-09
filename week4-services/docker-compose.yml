@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: supermarket-pg-week4
+    environment:
+      POSTGRES_DB: supermarket
+      POSTGRES_USER: supermarket
+      POSTGRES_PASSWORD: supermarket
+    # Host port 5435 so weeks 1-3 (5432-5434) can stay up alongside this one.
+    ports:
+      - "5435:5432"
+    volumes:
+      - supermarket-pgdata-week4:/var/lib/postgresql/data
+      # Runs only against an empty data directory, i.e. after `docker compose down -v`.
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U supermarket -d supermarket"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  supermarket-pgdata-week4:

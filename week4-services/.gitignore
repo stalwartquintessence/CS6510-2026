@@ -1,0 +1,8 @@
+target/
+*.class
+*.log
+*.pid
+.DS_Store
+.idea/
+*.iml
+logs/

@@ -177,6 +177,7 @@ Submit the timestamped JSON report for each architecture in a
 | 1    | [`week1-monolith/`](week1-monolith/) | Layered monolith (Spring Boot + PostgreSQL) | Complete — see its [README](week1-monolith/README.md) and [ARCHITECTURE.md](week1-monolith/ARCHITECTURE.md) |
 | 2    | [`week2-layered/`](week2-layered/)   | Layered architecture, boundaries enforced by ArchUnit (Spring Boot + PostgreSQL) | Complete — see its [README](week2-layered/README.md) and [ARCHITECTURE.md](week2-layered/ARCHITECTURE.md) |
 | 3    | [`week3-pipeline/`](week3-pipeline/) | Pipeline (pipes and filters) for the popular-items analytics: Window → Rank → Enrich → Publish on their own threads, connected by `BlockingQueue`s; rest is week 2 | Complete — see its [README](week3-pipeline/README.md) and [ARCHITECTURE.md](week3-pipeline/ARCHITECTURE.md) |
+| 4    | [`week4-services/`](week4-services/) | Service-based: four domain services (catalog, transaction, inventory, analytics) as separate jars sharing one PostgreSQL, behind a REST gateway; gRPC between gateway and services | Complete — see its [README](week4-services/README.md) and [ARCHITECTURE.md](week4-services/ARCHITECTURE.md) |
 
 Add a row here each week a new implementation directory lands.
 

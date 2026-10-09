@@ -28,8 +28,11 @@ them.
   boundaries enforced by ArchUnit (`src/test/.../architecture/LayeredArchitectureTest.java`).
 - `week3-pipeline/` — Week 3: week 2 with the popular-items analytics rebuilt as pipes and filters
   (Window → Rank → Enrich → Publish, one thread each, `BlockingQueue` pipes).
+- `week4-services/` — Week 4: service-based. A multi-module Maven build: four domain services
+  (catalog, transaction, inventory, analytics — one Spring Boot jar and JVM each) over one shared
+  PostgreSQL, behind a REST gateway that calls them over gRPC.
 
-Each week is a self-contained Maven project with its own README/ARCHITECTURE.md, `mvnw`,
+Each week is a self-contained Maven project (week 4 is a multi-module one) with its own README/ARCHITECTURE.md, `mvnw`,
 `docker-compose.yml` and `reports/`. Week N+1 starts as a copy of week N, and only the part under
 study changes. Runtime tuning (Hikari 50, Tomcat 200, window 1000/500, catalog 2000 × 10 000) is
 held constant so week-over-week numbers stay comparable.
@@ -192,3 +195,33 @@ Only `analytics/` differs from week 2:
 Each week's `README.md` documents how to build/run and that week's load-test results; each week's
 `ARCHITECTURE.md` documents its architectural characteristics, trade-offs, and evidence — read
 those for week-specific detail beyond what's summarized here.
+
+### Week 4 service-based internals (`week4-services/`)
+
+Different shape from weeks 1–3: **multi-module**, not one jar. Build and run from `week4-services/`:
+
+```bash
+docker compose up -d            # supermarket-pg-week4 on host port 5435; db/init.sql creates the schema
+./mvnw -DskipTests package      # each service jar is target/<name>-1.0.0-exec.jar (plain jar kept for tests)
+./run-local.sh                  # five JVMs; logs/<service>.log; stop with ./stop-local.sh
+./mvnw test                     # 22 tests incl. architecture-tests (ArchUnit across all services)
+```
+
+- Modules: `shared-db` (domain kernel, entities, DAOs — linked into every service via
+  `@Import(SharedDatabaseConfig.class)`), `contracts` (`supermarket.proto` + generated stubs; `protoc` is
+  fetched by Maven), `service-support` (gRPC server lifecycle, `DomainErrorInterceptor`),
+  `catalog-service` :9101, `transaction-service` :9102, `inventory-service` :9103,
+  `analytics-service` :9104, `gateway` :8080 (the only HTTP surface and the only gRPC client; no DB).
+- Services never call each other. The one cross-service channel is the `scan_log` table: the
+  transaction service appends a row per scan inside the scan's DB transaction; the analytics service
+  tails it (`ScanLogSource`, 250 ms settle delay to tolerate sequence-vs-commit order) into the
+  week 3 pipeline. Stock decrement stays in the transaction service (`StockLedger`) so the sale is
+  still one local ACID transaction — it is *not* in inventory-service, which only reports.
+- The schema is `db/init.sql` (services run `ddl-auto=none`), not Hibernate-generated; it deliberately
+  mirrors the weeks 1–3 tables, including no index on `transaction_items.tx_id`.
+- Table-write ownership is enforced by ArchUnit rules in `architecture-tests`, not by convention.
+- Tuning held constant: Tomcat 200 on the gateway; 200 gRPC worker threads + Hikari 50 on the
+  transaction service; other services are small.
+- Postgres host port 5435. Run `docker compose down -v` and restart the services between measured runs
+  (the catalog service seeds on an empty DB; `run-local.sh` skips services whose pid file is live, so
+  run `./stop-local.sh` first or the catalog will not be re-seeded).
