@@ -1,8 +1,9 @@
 # Self-Checkout Service-Based Architecture Analysis
 
-> Latency figures come from the two committed reports in `reports/` and the same-session week 3
-> baselines in `week3-pipeline/reports/` (named in the Load Test Results section). Hardware is a
-> single M1 Pro laptop on battery power, with PostgreSQL in Docker on the same machine and every
+> Latency figures come from the two committed reports in `reports/` (run 2026-10-16) and the week 3
+> baselines in `week3-pipeline/reports/` (run 2026-10-05, a different session; both named in the Load
+> Test Results section). Hardware is a single M1 Pro laptop — on AC power for the week 4 runs, on
+> battery for the week 3 baselines — with PostgreSQL in Docker on the same machine and every
 > service a separate JVM on that same machine — so there is no real network between services, and
 > the cost of the extra hop measured here is a lower bound.
 
@@ -126,15 +127,11 @@ outside a transaction fails loudly rather than silently losing its lock). This i
 shortcoming of service-based architecture with a shared database: the *database* is where the real
 boundaries of consistency are, and services are drawn around them, not the other way round.
 
-## Why gRPC (and not brpc)
+## Why gRPC
 
-The professor suggested RPC between the pieces. Two projects have a name that sounds like "g-b-RPC":
-
-- **gRPC** — Google's RPC framework: HTTP/2 transport, Protocol Buffers contracts, first-class Java.
-- **brpc** — Baidu's (now Apache) C++ RPC framework. Strong in C++; its Java story is much thinner.
-
-I used **gRPC** (`grpc-java` 1.68 with Netty). Everything else in the repository is Java, and the
-gateway→service hop is exactly the strongly-typed, request/response, internal call gRPC is built for.
+I used **gRPC** (`grpc-java` 1.68 with Netty): HTTP/2 transport, Protocol Buffers contracts and
+first-class Java support. Everything else in the repository is Java, and the gateway→service hop is
+exactly the strongly-typed, request/response, internal call gRPC is built for.
 The `.proto` file is the service contract in the same way the OpenAPI file is the public one, and both
 sides are generated from it, so a field cannot silently mean different things to caller and callee.
 
@@ -166,33 +163,36 @@ equivalent: **503** when a service is down and **504** when it misses its 10 s d
 
 ## Load Test Results
 
-Week 4's two reports: `reports/report-20261005-210516.json` (default, 10 stations × 60 s) and
-`reports/report-20261005-210745.json` (stress, 100 × 120). Baseline: week 3 re-run in the same session,
-`week3-pipeline/reports/report-20261005-210904.json` and `report-20261005-211357.json`, each on a freshly
-reset database after a discarded warm-up run.
+Week 4's two reports: `reports/report-20261016-233556.json` (default, 10 stations × 60 s) and
+`reports/report-20261016-233838.json` (stress, 100 × 120), run on 2026-10-16, each on a freshly reset
+database with freshly started JVMs after a discarded warm-up run. Baseline: week 3's
+`week3-pipeline/reports/report-20261005-210904.json` and `report-20261005-211357.json`, from the
+2026-10-05 session — not re-run alongside these, so the comparison is across sessions.
 
 | | Default: week 3 | Default: week 4 | Stress: week 3 | Stress: week 4 |
 | - | - | - | - | - |
-| Throughput (tx/sec) | 106.1 | 90.4 | 80.1 | 76.3 |
-| START p95 / p99 | 4.7 / 7.4 ms | 6.0 / 11.6 ms | 81 / 134 ms | 84 / 295 ms |
-| SCAN p95 / p99 | 10.5 / 14.0 ms | 11.6 / 17.0 ms | 88 / 125 ms | 96 / 148 ms |
-| COMPLETE p95 / p99 | 60.9 / 107.9 ms | 65.6 / 107.8 ms | 1.80 / 3.12 s | 1.82 / 3.11 s |
+| Throughput (tx/sec) | 106.1 | 78.4 | 80.1 | 67.1 |
+| START p95 / p99 | 4.7 / 7.4 ms | 7.7 / 15.4 ms | 81 / 134 ms | 110 / 333 ms |
+| SCAN p95 / p99 | 10.5 / 14.0 ms | 13.4 / 23.2 ms | 88 / 125 ms | 113 / 182 ms |
+| COMPLETE p95 / p99 | 60.9 / 107.9 ms | 82.5 / 153.8 ms | 1.80 / 3.12 s | 2.33 / 3.89 s |
 | Errors | 0 | 0 | 0 | 0 |
 
 **What the numbers say.**
 
-- *The extra hop costs about a millisecond.* Mean START rises 2.65 → 3.78 ms and mean SCAN 6.18 → 7.33 ms:
+- *The extra hop costs about two milliseconds.* Mean START rises 2.65 → 4.60 ms and mean SCAN 6.18 → 8.28 ms:
   one gateway→service gRPC call each, plus one `scan_log` insert per scan. At 10 closed-loop stations that
-  is a ~15 % throughput drop. The cost is real but small, and on one machine it is a floor — a network
-  would add to it.
-- *The bottleneck did not move.* Under stress, `COMPLETE_TRANSACTION` p95/p99 is 1.80/3.12 s in week 3 and
-  1.82/3.11 s in week 4. That tail is the pessimistic row lock on Zipf-hot SKUs inside PostgreSQL, which
-  five processes share exactly as one process did. Services bought deployability and isolation, not
-  throughput. Stress throughput being 5 % lower is within the repo's documented run-to-run noise; the START
-  p99 gap (134 → 295 ms) is a single-run tail and I would not read an effect into it.
+  is a 26 % throughput drop. The baseline is from another session, so part of that gap may be the machine
+  on the day rather than the hop; and on one machine the hop's cost is a floor — a network would add to it.
+- *The bottleneck did not move.* Under stress, `COMPLETE_TRANSACTION` is still the tail by an order of
+  magnitude: p95/p99 2.33/3.89 s in week 4 (1.80/3.12 s in week 3), against ~110 ms p95 for START and SCAN.
+  That tail is the pessimistic row lock on Zipf-hot SKUs inside PostgreSQL, which five processes share
+  exactly as one process did. Services bought deployability and isolation, not throughput. The 25–30 %
+  higher tail and 16 % lower stress throughput are the size of the repo's documented run-to-run noise and
+  were measured in a different session from the baseline, so I would not read an effect into them without
+  a same-session week 3 re-run; the START p99 gap (134 → 333 ms) is a single-run tail either way.
 - *Correctness held.* Both runs: 0 lost updates, 0 negative stock; units decremented equal units sold
   (apart from the demand-over-supply flooring of `SKU-000001`, explained in the README). `scan_log` holds
-  one row per scan and the analytics pipeline consumed every one (57 709 and 97 041), dropping none.
+  one row per scan and the analytics pipeline consumed every one (49 889 and 85 476), dropping none.
 - *Fault isolation works.* With the analytics, inventory and catalog services killed, checkout still
   completed sales, and the three dead endpoints answered `503 SERVICE_UNAVAILABLE`. Week 3 could not
   lose analytics without losing the process.
@@ -205,7 +205,7 @@ Each service runs its methods on a fixed pool (`GrpcServerLifecycle`) instead of
 unbounded cached pool. Methods block on JDBC, so the pool size *is* the service's concurrency limit.
 The transaction service gets 200 worker threads and 50 Hikari connections — the 200/50 held constant
 since week 1, now sitting where the work is — and the gateway keeps Tomcat's 200. The other services
-get 16 threads and 5 connections or fewer. Total connections across services is at most 62, under
+get 16 threads and 5 connections or fewer. Total connections across services is at most 65, under
 PostgreSQL's default `max_connections` of 100.
 
 The gateway opens 4 HTTP/2 channels per service and spreads calls round-robin. One channel multiplexes
@@ -215,8 +215,11 @@ many calls but pins them all to one Netty event loop; four is a small, cheap hed
 
 They set `spring.main.web-application-type=none`: a service's only door is its gRPC port. gRPC's own
 threads are daemons, so a non-daemon thread parked on `server.awaitTermination()` keeps the JVM alive.
-The gRPC server is the last lifecycle bean to start (so seeding and the pipeline are up before the
-first call) and the first to stop.
+The gRPC server is the last lifecycle bean to start (so the analytics pipeline is up before the first
+call) and the first to stop. Catalog seeding is not covered by that ordering: it is a `CommandLineRunner`,
+which Spring Boot runs only after the lifecycle beans have started, so the catalog service's port opens
+a moment before the seed finishes. `run-local.sh` therefore waits for the `Seeded catalog` log line,
+after all five services are up, before it reports the system ready.
 
 ### Schema ownership
 

@@ -94,60 +94,63 @@ services afterwards so the catalog is re-seeded.
 
 Week 4's two submission reports are in `reports/`:
 
-- `report-20261005-210516.json` — default (10 stations, 60 s)
-- `report-20261005-210745.json` — stress (100 stations, 120 s, i.e. `--stations=100 --duration=120`)
+- `report-20261016-233556.json` — default (10 stations, 60 s)
+- `report-20261016-233838.json` — stress (100 stations, 120 s, i.e. `--stations=100 --duration=120`)
 
-Week 3 was **re-run in the same session at both loads** as the like-for-like baseline
-(`week3-pipeline/reports/report-20261005-210904.json` default, `report-20261005-211357.json` stress).
-Same laptop, on battery, Docker warmed up first (a discarded 40 s warm-up run), each run on a freshly
-reset database and freshly started JVMs.
+Both were run on 2026-10-16 against the current code: same laptop, on AC power, Docker warmed up first
+(a discarded 40 s warm-up run), each run on a freshly reset database and freshly started JVMs. The week 3
+baseline (`week3-pipeline/reports/report-20261005-210904.json` default, `report-20261005-211357.json`
+stress) was **not** re-run in this session — it is from the 2026-10-05 session (on battery), so the
+comparison below is across sessions, not like-for-like.
 
 ### Default mode — 10 stations, 60 s
 
 | Metric | Week 3 | Week 4 |
 | ------ | ------ | ------ |
-| Throughput | **106.1 tx/sec** | 90.4 tx/sec |
-| Items/sec | **1 109.5** | 960.0 |
-| START p95 / p99 | **4.7 / 7.4 ms** | 6.0 / 11.6 ms |
-| SCAN p95 / p99 | **10.5 / 14.0 ms** | 11.6 / 17.0 ms |
-| COMPLETE p95 / p99 | 60.9 / 107.9 ms | 65.6 / 107.8 ms |
+| Throughput | **106.1 tx/sec** | 78.4 tx/sec |
+| Items/sec | **1 109.5** | 829.9 |
+| START p95 / p99 | **4.7 / 7.4 ms** | 7.7 / 15.4 ms |
+| SCAN p95 / p99 | **10.5 / 14.0 ms** | 13.4 / 23.2 ms |
+| COMPLETE p95 / p99 | **60.9 / 107.9 ms** | 82.5 / 153.8 ms |
 | Errors | 0 | 0 |
 
 ### Stress mode — 100 stations, 120 s
 
 | Metric | Week 3 | Week 4 |
 | ------ | ------ | ------ |
-| Throughput | **80.1 tx/sec** | 76.3 tx/sec |
-| Items/sec | **839.3** | 802.6 |
-| START p95 / p99 | **81 / 134 ms** | 84 / 295 ms |
-| SCAN p95 / p99 | **88 / 125 ms** | 96 / 148 ms |
-| COMPLETE p95 / p99 | 1.80 / 3.12 s | 1.82 / 3.11 s |
+| Throughput | **80.1 tx/sec** | 67.1 tx/sec |
+| Items/sec | **839.3** | 706.9 |
+| START p95 / p99 | **81 / 134 ms** | 110 / 333 ms |
+| SCAN p95 / p99 | **88 / 125 ms** | 113 / 182 ms |
+| COMPLETE p95 / p99 | **1.80 / 3.12 s** | 2.33 / 3.89 s |
 | Errors | 0 | 0 |
 
-**The honest reading: week 4 is a little slower, and the cost is the extra hop, not a change in the
-bottleneck.** At low load every request pays for one gateway→service gRPC call, and every scan pays for
-one extra `INSERT` into `scan_log`: mean START and SCAN latency rise by about 1.1 ms each (3.78 vs 2.65 ms,
-7.33 vs 6.18 ms), which at 10 closed-loop stations is a ~15 % throughput drop. Under stress the
-`COMPLETE_TRANSACTION` tail — 1.8 s p95, 3.1 s p99 — is **the same in both weeks to within 1 %**, because it
-is the pessimistic row lock on Zipf-hot SKUs in PostgreSQL, and splitting the application into services
-does nothing to it. Stress throughput is 5 % lower, which is inside the run-to-run noise this repo has
-documented (~25 % between cold and warm runs of one jar); the START p99 (295 vs 134 ms) is the one number
-that looks like a real difference and is a single-run tail, so I would not lean on it. This is a
-single-machine run: with the services on separate hosts the network would add to every hop.
+**The honest reading: week 4 is slower at both loads, but this is a cross-session comparison, so the size
+of the gap is not trustworthy.** At low load every request pays for one gateway→service gRPC call, and
+every scan pays for one extra `INSERT` into `scan_log`: mean START and SCAN latency are 4.60 vs 2.65 ms and
+8.28 vs 6.18 ms, and at 10 closed-loop stations throughput is 26 % lower. Under stress
+`COMPLETE_TRANSACTION` is still the tail by an order of magnitude — 2.3 s p95, 3.9 s p99, against ~110 ms
+for START and SCAN — because it is the pessimistic row lock on Zipf-hot SKUs in PostgreSQL, and splitting
+the application into services does nothing to it. That tail is 25–30 % above week 3's, and stress
+throughput is 16 % lower. Those gaps are the size of the run-to-run noise this repo has documented (~25 %
+between cold and warm runs of one jar), and the two weeks were measured on different days, so they cannot
+be put down to the architecture without re-running week 3 in the same session; the START p99 (333 vs
+134 ms) is a single-run tail, so I would not lean on it either. This is a single-machine run: with the
+services on separate hosts the network would add to every hop.
 
-The popular-items ranking is the same as in every earlier week (`SKU-000001`, `-02`, `-03`, `-04` on top).
+The popular-items ranking matches every earlier week (`SKU-000001`, `-02`, `-03` on top in both runs).
 
 ### Correctness invariant
 
 Checked against the database after each run:
 
-- **Default:** 0 lost updates, 0 negative-stock rows. 57 709 units decremented = 57 709 units in completed
+- **Default:** 0 lost updates, 0 negative-stock rows. 49 889 units decremented = 49 889 units in completed
   transactions = the client's reported scan count.
-- **Stress:** 0 lost updates, 0 negative-stock rows. 97 041 units sold against 95 154 decremented: the
-  1 887-unit gap is demand for `SKU-000001` beyond its 10 000-unit supply, which the decrement correctly floors
+- **Stress:** 0 lost updates, 0 negative-stock rows. 85 476 units sold against 84 874 decremented: the
+  602-unit gap is demand for `SKU-000001` beyond its 10 000-unit supply, which the decrement correctly floors
   at 0 (the Zipf sampler sends ~12 % of scans to rank 1) — the same legitimate demand-over-supply as weeks 1–3,
   not a concurrency defect.
-- **`scan_log` accounting:** the table holds exactly one row per scanned unit (57 709 and 97 041), and on
+- **`scan_log` accounting:** the table holds exactly one row per scanned unit (49 889 and 85 476), and on
   shutdown the analytics pipeline's Window stage had handled exactly that many, with **0 scans dropped and
   0 snapshots superseded** in both runs.
 
