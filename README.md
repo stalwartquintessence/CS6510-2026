@@ -178,6 +178,7 @@ Submit the timestamped JSON report for each architecture in a
 | 2    | [`week2-layered/`](week2-layered/)   | Layered architecture, boundaries enforced by ArchUnit (Spring Boot + PostgreSQL) | Complete — see its [README](week2-layered/README.md) and [ARCHITECTURE.md](week2-layered/ARCHITECTURE.md) |
 | 3    | [`week3-pipeline/`](week3-pipeline/) | Pipeline (pipes and filters) for the popular-items analytics: Window → Rank → Enrich → Publish on their own threads, connected by `BlockingQueue`s; rest is week 2 | Complete — see its [README](week3-pipeline/README.md) and [ARCHITECTURE.md](week3-pipeline/ARCHITECTURE.md) |
 | 4    | [`week4-services/`](week4-services/) | Service-based: four domain services (catalog, transaction, inventory, analytics) as separate jars sharing one PostgreSQL, behind a REST gateway; gRPC between gateway and services | Complete — see its [README](week4-services/README.md) and [ARCHITECTURE.md](week4-services/ARCHITECTURE.md) |
+| 5    | [`week5-microservices/`](week5-microservices/) | Microservices: the same four services, each with its own PostgreSQL; checkout completion is an orchestrated saga (with compensation and crash recovery) across the transaction and inventory services; scans reach analytics through an outbox read over gRPC; API gateway in front | Complete — see its [README](week5-microservices/README.md) and [ARCHITECTURE.md](week5-microservices/ARCHITECTURE.md) |
 
 Add a row here each week a new implementation directory lands.
 

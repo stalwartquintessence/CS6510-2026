@@ -31,8 +31,12 @@ them.
 - `week4-services/` — Week 4: service-based. A multi-module Maven build: four domain services
   (catalog, transaction, inventory, analytics — one Spring Boot jar and JVM each) over one shared
   PostgreSQL, behind a REST gateway that calls them over gRPC.
+- `week5-microservices/` — Week 5: microservices. Week 4's services, each with its own PostgreSQL
+  (no shared library or table); `complete` is an orchestrated saga (transaction service →
+  inventory's `StockService`) with compensation and crash recovery; scans reach analytics through
+  an outbox read over gRPC (`ScanFeed`). No message broker.
 
-Each week is a self-contained Maven project (week 4 is a multi-module one) with its own README/ARCHITECTURE.md, `mvnw`,
+Each week is a self-contained Maven project (weeks 4–5 are multi-module) with its own README/ARCHITECTURE.md, `mvnw`,
 `docker-compose.yml` and `reports/`. Week N+1 starts as a copy of week N, and only the part under
 study changes. Runtime tuning (Hikari 50, Tomcat 200, window 1000/500, catalog 2000 × 10 000) is
 held constant so week-over-week numbers stay comparable.
@@ -225,3 +229,35 @@ docker compose up -d            # supermarket-pg-week4 on host port 5435; db/ini
 - Postgres host port 5435. Run `docker compose down -v` and restart the services between measured runs
   (the catalog service seeds on an empty DB; `run-local.sh` skips services whose pid file is live, so
   run `./stop-local.sh` first or the catalog will not be re-seeded).
+
+### Week 5 microservices internals (`week5-microservices/`)
+
+Week 4's module layout minus `shared-db`. Build and run from `week5-microservices/`:
+
+```bash
+docker compose up -d --wait     # four PostgreSQL servers, host ports 5436 catalog / 5437 transaction / 5438 inventory / 5439 analytics
+./mvnw -DskipTests package      # target/<name>-1.0.0-exec.jar per service, as in week 4
+./run-local.sh                  # all five JVMs in dependency order; ./run-local.sh <service> (re)starts one
+./verify-invariant.sh           # the correctness invariant, joined across transaction-db and inventory-db
+./fault-injection.sh <service>  # load + kill -9 one service mid-run + restart + recovery wait + invariant
+./mvnw test                     # 39 tests: saga, ledger, feed, pipeline, ArchUnit call graph, db-per-service config
+```
+
+- Each service has its own `persistence` package and `db/<service>.sql`; `contracts` (proto) and
+  `service-support` (gRPC server, `StubPool` clients, the `support.error` exceptions) are the only shared
+  modules and must not touch persistence (ArchUnit).
+- Call graph (enforced by which stubs a package may hold): gateway → the four public services;
+  transaction → catalog (`CatalogCache`, warmed at startup) + inventory's internal `StockService`;
+  inventory → catalog (seeding only); analytics → transaction's internal `ScanFeed` + catalog (names).
+- `complete` = `CheckoutSaga`: `BasketStore.freeze` (OPEN→COMPLETING, `saga_attempt`+1) → `DeductStock(txId/attempt)`
+  → `markCompleted`; on failure COMPENSATING → `RestoreStock` → OPEN and a 503. `SagaRecovery` compensates
+  sagas stuck > 30 s. Inventory's `StockLedger` is idempotent by sale id (`sales` PK, tombstones) and keeps the
+  weeks 1–4 SKU-sorted `SELECT … FOR UPDATE`, floored at 0. Deadlines: gateway 10 s, deduct 9 s, restore 5 s.
+- Tuning: transaction *and* inventory get 200 gRPC threads / Hikari 50 (inventory now holds the hot row
+  locks); catalog/analytics small.
+- Between measured runs: `./stop-local.sh && docker compose down -v`, then `up -d --wait` and `./run-local.sh`.
+  Week 5's `run-local.sh` refuses to start a service whose port is taken — week 4's does not, and if another
+  week's services still hold 8080/9101–9104 its `wait_for_port` passes and the load client silently drives
+  the wrong week. Check the ports are free before running any week.
+- After a load run, wait for `sagas_in_flight` to reach 0 (up to ~35 s) before `verify-invariant.sh`, or it
+  reports the in-flight sagas as failures.

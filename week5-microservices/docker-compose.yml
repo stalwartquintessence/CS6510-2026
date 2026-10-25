@@ -1,0 +1,71 @@
+# One PostgreSQL per microservice: separate servers, databases, roles and volumes, so no
+# service can reach another's data except through its RPCs. Host ports 5436-5439, so weeks
+# 1-4 (5432-5435) can stay up alongside. Each schema is applied only to an empty data
+# directory, i.e. after `docker compose down -v`.
+
+x-postgres: &postgres
+  image: postgres:16
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+    interval: 3s
+    timeout: 3s
+    retries: 20
+
+services:
+  catalog-db:
+    <<: *postgres
+    container_name: supermarket-week5-catalog-db
+    environment:
+      POSTGRES_DB: catalog
+      POSTGRES_USER: catalog
+      POSTGRES_PASSWORD: catalog
+    ports:
+      - "5436:5432"
+    volumes:
+      - catalog-pgdata:/var/lib/postgresql/data
+      - ./db/catalog.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+
+  transaction-db:
+    <<: *postgres
+    container_name: supermarket-week5-transaction-db
+    environment:
+      POSTGRES_DB: transaction
+      POSTGRES_USER: transaction
+      POSTGRES_PASSWORD: transaction
+    ports:
+      - "5437:5432"
+    volumes:
+      - transaction-pgdata:/var/lib/postgresql/data
+      - ./db/transaction.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+
+  inventory-db:
+    <<: *postgres
+    container_name: supermarket-week5-inventory-db
+    environment:
+      POSTGRES_DB: inventory
+      POSTGRES_USER: inventory
+      POSTGRES_PASSWORD: inventory
+    ports:
+      - "5438:5432"
+    volumes:
+      - inventory-pgdata:/var/lib/postgresql/data
+      - ./db/inventory.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+
+  analytics-db:
+    <<: *postgres
+    container_name: supermarket-week5-analytics-db
+    environment:
+      POSTGRES_DB: analytics
+      POSTGRES_USER: analytics
+      POSTGRES_PASSWORD: analytics
+    ports:
+      - "5439:5432"
+    volumes:
+      - analytics-pgdata:/var/lib/postgresql/data
+      - ./db/analytics.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+
+volumes:
+  catalog-pgdata:
+  transaction-pgdata:
+  inventory-pgdata:
+  analytics-pgdata:

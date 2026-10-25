@@ -1,0 +1,233 @@
+// The service contracts. The public HTTP contract (spec/self-checkout-openapi.yaml)
+// is untouched: the gateway is the only component that speaks it, and translates
+// each call into one of the four public services below.
+//
+// Week 5 adds two internal services that the gateway never calls (ArchUnit enforces
+// who may hold which stub): StockService, the checkout saga's stock step, and
+// ScanFeed, the transaction service's outbox of scans read by analytics. A
+// microservice's data is reachable only through RPCs like these, never its tables.
+syntax = "proto3";
+
+package supermarket.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option java_multiple_files = true;
+option java_package = "com.supermarket.contracts";
+option java_outer_classname = "SupermarketProto";
+
+// ---------------------------------------------------------------- catalog
+
+service CatalogService {
+  rpc ListItems(ListItemsRequest) returns (ListItemsResponse);
+  // NOT_FOUND (UNKNOWN_SKU) for a SKU the catalog does not hold.
+  rpc GetItem(GetItemRequest) returns (CatalogItem);
+}
+
+message ListItemsRequest {}
+
+message GetItemRequest {
+  string sku = 1;
+}
+
+message CatalogItem {
+  string sku = 1;
+  string name = 2;
+  double price = 3;
+}
+
+message ListItemsResponse {
+  repeated CatalogItem items = 1;
+}
+
+// ------------------------------------------------------------ transaction
+
+service TransactionService {
+  rpc Start(StartRequest) returns (Basket);
+  rpc Scan(ScanRequest) returns (ScanResult);
+  rpc Complete(CompleteRequest) returns (Receipt);
+  rpc GetStatus(GetStatusRequest) returns (Basket);
+}
+
+message StartRequest {
+  string station_id = 1;
+}
+
+message ScanRequest {
+  string transaction_id = 1;
+  string sku = 2;
+}
+
+message CompleteRequest {
+  string transaction_id = 1;
+}
+
+message GetStatusRequest {
+  string transaction_id = 1;
+}
+
+message Basket {
+  string transaction_id = 1;
+  string station_id = 2;
+  string status = 3;
+  int32 item_count = 4;
+  double running_total = 5;
+  google.protobuf.Timestamp started_at = 6;
+}
+
+message ScanResult {
+  string transaction_id = 1;
+  string sku = 2;
+  string name = 3;
+  double unit_price = 4;
+  int32 item_count = 5;
+  double running_total = 6;
+}
+
+message ReceiptLine {
+  string sku = 1;
+  string name = 2;
+  double unit_price = 3;
+  int32 quantity = 4;
+}
+
+message Receipt {
+  string transaction_id = 1;
+  string station_id = 2;
+  int32 item_count = 3;
+  double total_amount = 4;
+  google.protobuf.Timestamp started_at = 5;
+  google.protobuf.Timestamp completed_at = 6;
+  repeated ReceiptLine lines = 7;
+}
+
+// -------------------------------------------------------------- inventory
+
+service InventoryService {
+  rpc GetLowStock(LowStockRequest) returns (LowStockReport);
+}
+
+message LowStockRequest {
+  // Absent means "the service's configured default".
+  optional int32 threshold = 1;
+}
+
+message LowStockAlert {
+  string sku = 1;
+  string name = 2;
+  int32 current_stock = 3;
+  int32 threshold = 4;
+}
+
+message LowStockReport {
+  int32 threshold = 1;
+  google.protobuf.Timestamp generated_at = 2;
+  repeated LowStockAlert alerts = 3;
+}
+
+// -------------------------------------------------------------- analytics
+
+service AnalyticsService {
+  rpc GetPopularItems(PopularItemsRequest) returns (PopularItemsReport);
+}
+
+message PopularItemsRequest {
+  int32 limit = 1;
+}
+
+message PopularItem {
+  string sku = 1;
+  string name = 2;
+  int32 scan_count = 3;
+  int32 rank = 4;
+}
+
+message PopularItemsReport {
+  int32 window_size = 1;
+  int32 slide_interval = 2;
+  int64 window_start = 3;
+  int64 window_end = 4;
+  google.protobuf.Timestamp computed_at = 5;
+  repeated PopularItem items = 6;
+}
+
+// ------------------------------------------------- stock (internal, saga)
+//
+// Called only by the transaction service, which orchestrates checkout. Both calls are
+// idempotent by sale_id (one sale_id per completion attempt), so a retry or a recovery
+// pass can repeat them safely.
+
+service StockService {
+  // Decrements every line's stock in one local transaction, floored at zero, and
+  // records what was applied. Repeating it for a known sale_id returns the stored
+  // result; for a sale_id that was already restored it applies nothing.
+  rpc DeductStock(DeductStockRequest) returns (DeductStockResult);
+  // The compensation: puts back exactly what DeductStock applied. If DeductStock never
+  // arrived it leaves a tombstone, so a late DeductStock for the same sale_id is refused.
+  rpc RestoreStock(RestoreStockRequest) returns (RestoreStockResult);
+}
+
+message StockLine {
+  string sku = 1;
+  int32 quantity = 2;
+}
+
+message DeductStockRequest {
+  string sale_id = 1;
+  repeated StockLine lines = 2;
+}
+
+message AppliedLine {
+  string sku = 1;
+  int32 requested = 2;
+  int32 applied = 3;
+}
+
+message DeductStockResult {
+  string sale_id = 1;
+  // False if the sale had already been restored (the tombstone case): nothing was deducted.
+  bool applied = 2;
+  repeated AppliedLine lines = 3;
+}
+
+message RestoreStockRequest {
+  string sale_id = 1;
+}
+
+message RestoreStockResult {
+  string sale_id = 1;
+  int32 units_restored = 2;
+}
+
+// ------------------------------------------- scan feed (internal, outbox)
+//
+// Served by the transaction service from its own scan_events table, read by the
+// analytics service. Ids are the table's sequence, so they give a total order.
+
+service ScanFeed {
+  // Up to limit events with id strictly greater than after_id, oldest first.
+  rpc ReadScans(ReadScansRequest) returns (ScanBatch);
+  // The newest event id, or 0 if there are none.
+  rpc LatestScanId(LatestScanIdRequest) returns (ScanId);
+}
+
+message ReadScansRequest {
+  int64 after_id = 1;
+  int32 limit = 2;
+}
+
+message ScanFeedEvent {
+  int64 id = 1;
+  string sku = 2;
+  google.protobuf.Timestamp scanned_at = 3;
+}
+
+message ScanBatch {
+  repeated ScanFeedEvent events = 1;
+}
+
+message LatestScanIdRequest {}
+
+message ScanId {
+  int64 id = 1;
+}
