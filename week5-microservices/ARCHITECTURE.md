@@ -1,6 +1,8 @@
 # Self-Checkout Microservices Architecture Analysis
 
-> All figures are from one M1 Pro laptop on AC power, every service and database on the same machine.
+> All figures are from one M1 Pro laptop (8 cores) on AC power, every service and database on the same
+> machine, measured on 2026-10-24/25. Its CPU is about 95 % busy at both the default and the stress
+> load, which shapes every latency below (see *"2 ms per call is high?"*).
 
 ## The services
 
@@ -219,6 +221,26 @@ A message broker would be the textbook alternative: a relay publishing the outbo
 Kafka. It would add a container, a client library and a delivery-semantics story to buy what the
 feed already provides here, and it is what the event-driven week is for.
 
+**It is still a poll.** The week 4 review called polling for scans reasonable and expected it to
+change. Here is what changed and what did not:
+
+- **Changed:** analytics no longer reads another service's table. It calls an API that the
+  transaction service owns, and the table behind that API can change without analytics knowing.
+- **Not changed:** analytics still asks "anything after id *N*?" every 50 ms (at once again if the
+  batch was full), and nothing is pushed to it.
+
+That is a choice, not an oversight:
+
+- **The consumer holds the cursor.** That is what lets either side restart without the other
+  noticing, and lets analytics replay a window after a restart.
+- **It is cheap.** An empty poll is one primary-key range query. A scan reaches the window 250–300 ms
+  after it happens: the settle delay plus at most one poll interval.
+
+The poll could go without a broker. A server-streaming `ScanFeed.Subscribe(afterId)` would let the
+transaction service push each scan after its commit, but the producer would then have to track its
+subscribers and resend whatever a reconnecting one missed. That is a broker's job, and putting a
+broker behind the outbox is the natural next step for an event-driven design.
+
 ## Why gRPC (still)
 
 Unchanged from week 4 for the gateway → service hop: typed contracts generated from one `.proto`,
@@ -234,15 +256,237 @@ which brings two things the gateway hop did not need:
 
 ## Architectural characteristics
 
-_Results write-up in progress: the raw load-client reports are in `reports/` (same-session week 4 baselines in `../week4-services/reports/`) and `reports/fault-injection/`._
+| Characteristic | Week 4 (service-based) | Week 5 (microservices) |
+| -------------- | ---------------------- | ---------------------- |
+| **Data independence** | Lost: one schema, linked into every service as `shared-db` | **Regained**: each service's tables are private, behind its RPCs, so changing them is a local change |
+| **Deployability** | Five jars, but a table change means redeploying every service that links `shared-db` | Five jars; four private schemas. Any one service can be stopped and redeployed alone (`./run-local.sh <service>`), and fault injection did exactly that to each of them under load |
+| **Fault isolation** | Analytics, catalog or inventory could be down while checkout carried on; the shared database could not | Catalog or analytics down: **0** checkout errors. Inventory down: only `complete` fails, fast (503), and the system repairs itself. Each database now belongs to one service |
+| **Consistency** | One ACID transaction per sale | A saga: atomic once it settles, but not isolated. Checked across both databases after every run, including the crashes |
+| **Recoverability** | Nothing to recover: a crash rolls the sale back | Sagas cut off by a crash or an outage are finished by the recovery job (within ~40 s); a restarted service is reachable again in 0.1–0.2 s |
+| **Performance, default load** | 89 tx/s | 76 tx/s: `complete` is now three local transactions and a service call |
+| **Performance, stress** | 78 tx/s, capped by the hot row lock | 77 tx/s, the same cap. The waiting moved from START/SCAN into COMPLETE; 3 timeouts in 18 524 completes |
+| **Scalability** | Services scale alone, but all share one database server | Services and their databases scale alone, and checkout's database work is split over two servers. The hot row still caps checkout, whatever is scaled |
+| **Modularity** | Maven modules and ArchUnit | The same, plus an enforced call graph (which service may hold which stub) |
+| **Simplicity** | Six processes, one database to inspect | Nine processes (five JVMs, four databases); a five-state saga, a recovery job, idempotency keys and an outbox. "What happened to this sale?" now spans two databases |
+
+Performance figures are two-round averages from the same session (*Load test results*).
 
 ## Load test results
 
-_Results write-up in progress: the raw load-client reports are in `reports/` (same-session week 4 baselines in `../week4-services/reports/`) and `reports/fault-injection/`._
+The report files and the per-run tables are in the README (*Results*). Week 4 was re-run in the same session,
+interleaved with week 5, on fresh databases each time. Averages over the two rounds:
+
+| | Default: week 4 | Default: week 5 | Stress: week 4 | Stress: week 5 |
+| - | - | - | - | - |
+| Transactions | 5 354 (89.0/s) | 4 550 (75.7/s) | 9 398 (77.7/s) | 9 260 (76.8/s) |
+| START mean | 3.8 ms | 4.4 ms | 58 ms | 9.0 ms |
+| SCAN mean | 7.5 ms | 8.3 ms | 64 ms | 17.9 ms |
+| COMPLETE mean | 29 ms | 42 ms | 561 ms | 1 101 ms |
+| COMPLETE p95 / p99 | 68 / 103 ms | 98 / 171 ms | 1.84 / 3.12 s | 2.69 / 4.24 s |
+| Errors | 0 | 0 | 0 | 3 (of 18 524 completes) |
+
+**Default load: the saga costs about 13 ms per sale.** `complete` is now three local transactions in two
+databases plus a service call, where week 4 had one transaction:
+
+1. freeze, in transaction-db;
+2. deduct, in inventory-db, over gRPC;
+3. mark completed, in transaction-db.
+
+Starts and scans are unchanged within noise. This laptop's CPU is saturated even at 10 stations (see
+*"2 ms per call is high?"* below), so the extra work also costs throughput: −20 % and −11 % in the two
+rounds.
+
+**Stress: the same throughput, but the waiting moved.** The load client is a closed loop with no think
+time, so Little's law gives throughput exactly: *X = N / R*, where *N* is the 100 stations and *R* is one
+station's cycle (a start, about 10.5 scans, a complete).
+
+- Week 4: *R* = 58 + 10.4 × 64 + 561 ≈ 1 284 ms, so *X* ≈ 78/s (measured 77.7/s).
+- Week 5: *R* = 9 + 10.5 × 18 + 1 101 ≈ 1 299 ms, so *X* ≈ 77/s (measured 76.8/s).
+
+The cycle is the same length; only its split changed. In both weeks the binding limit is the row lock on
+`SKU-000001`, which is in about two in three baskets. Every such sale passes through that lock one at a
+time, and splitting the database does not change how long each sale holds it. What changed is where the
+other stations wait:
+
+- **In week 4**, a `complete` waiting for the lock holds one of the transaction service's 50 database
+  connections, and starts and scans need those connections too. Little's law puts 44 stations in
+  `complete` on average and 52 scanning.
+- **In week 5**, the lock wait holds an inventory connection instead. 85 stations park in `complete` and
+  only 15 are scanning.
+
+The scan path behaves like one saturated resource. In every run in this document a scan's latency is
+proportional to how many stations are scanning at once, at 1.0–1.4 ms per station. So fewer stations
+scanning means faster scans: 18 ms against 64 ms. That is also the connections confound noted under
+*Thread pools and connections*. Week 5's extra 50 connections change where the stations wait, not how many
+sales get through. More connections could not have raised week 4's throughput either, because more sales
+waiting at one lock do not get through it faster.
+
+**The 3 errors are the saga's deadline.** Three stock steps waited longer than 9 s for the hot lock. The
+saga gave up and compensated, and the restore also queued for the lock (1–3 s), so the load client's
+own 10 s timeout fired before the 503 arrived. The stock was put back, and the invariant counts those three
+baskets as not sold. Week 4 has no deadline on that wait; its longest `complete` simply took 7.7 s.
 
 ## Fault injection
 
-_Results write-up in progress: the raw load-client reports are in `reports/` (same-session week 4 baselines in `../week4-services/reports/`) and `reports/fault-injection/`._
+`fault-injection.sh <service>` does the following, once per service, each on fresh databases (reports in
+`reports/fault-injection/`):
+
+1. drives the default load (10 stations × 60 s);
+2. kills the service with `kill -9` at +20 s. There are no shutdown hooks, so its in-flight requests and
+   sagas are simply cut off;
+3. restarts it 15 s later;
+4. measures how long until a request through the gateway that needs the service succeeds again;
+5. waits for saga recovery, then checks the invariant.
+
+| Killed | Sales | Failed while it was down | Time to recover | Recovery | Invariant |
+| ------ | ----- | ------------------------ | --------------- | -------- | --------- |
+| inventory | 3 042 | 1 837 completes (fast 503, mean 44 ms); 0 starts, 0 scans | 0.1 s | 1 836 sagas compensated by the recovery job, the last by its own request | holds |
+| transaction | 3 118 | 247 742 starts (the client retries without pausing), 6 scans, 3 completes | 0.2 s | the 3 sagas the crash cut off, compensated after the restart | holds |
+| analytics | 4 606 | **0** | 0.2 s | — | holds |
+| catalog | 4 748 | **0** | 0.2 s | — | holds |
+
+- **Inventory: the saga's failure path, 1 837 times.** With inventory gone, `DeductStock` fails at once
+  (`UNAVAILABLE`), the in-request `RestoreStock` fails too, and the saga is left `COMPENSATING` with a 503
+  to the client. Starts and scans never touch inventory and carried on. When the load ended, 1 106 sagas
+  were still waiting out their 30 s; 16 s later none were. The recovery job logged 1 836 compensations in
+  all, and nothing was left in flight, so the remaining one was compensated by its own request, the only
+  other actor that can. None of those baskets was sold, and no stock was lost.
+- **Transaction: the orchestrator dies mid-saga.** Three sagas were between freeze and completion. The
+  restarted service found them stuck and compensated them. Nothing works while the transaction service is
+  down, because it *is* checkout: the gateway answered every start with an immediate 503, and the client's
+  stations retried without pausing, hence the 247 742.
+- **Analytics and catalog: independent deployment.** Neither run had a checkout error. Only their own
+  endpoints (`/analytics/popular-items`, `/items`) answered 503 while they were down. Checkout's item
+  cache is what carries a catalog outage.
+
+**What fault injection found: reconnecting took 6.6 s.** The first fault runs showed requests still failing
+6.6 s after the restarted service was listening. While a server is unreachable, a gRPC channel retries
+with exponential backoff (1 s, 1.6 s, 2.6 s, … up to two minutes) and fails calls at once in between. A
+dead port on the same machine refuses instantly, so a 15 s outage climbs well into that schedule.
+
+The fix is a watchdog in the chassis's `StubPool` and in the gateway's `ServiceClients`. Every 500 ms it
+calls `resetConnectBackoff()` on any channel in `TRANSIENT_FAILURE`, so a channel tries again within half a
+second of its server coming back. Time to recover went from 6.6 s to 0.1–0.2 s. The pre-fix
+transaction-service run is kept in `reports/fault-injection/before-reconnect-fix/`:
+
+| | Before the fix | After |
+| - | - | - |
+| Failed starts | 346 632 | 247 742 |
+| Failed scans | 1 548 | 6 |
+| Sales | 2 295 | 3 118 |
+
+## Two questions from the week 4 review
+
+The review of week 4 asked three questions. One, about polling for scans, is answered under *Scans to
+analytics* above. The other two are answered here by experiments. Each is kept apart from the comparison
+above, with its reports under `reports/experiments/`, and neither changes the defaults that comparison
+used.
+
+### "Locks on checkout are the slow part? How could you address this?"
+
+Yes, under stress: in week 5, 85 % of a station's cycle is `complete`, waiting for the row lock on
+`SKU-000001`. A lock's throughput is one over the time each sale holds it, and that time is not the
+sale's own SQL. Rows are locked in SKU order, so `SKU-000001` is locked *first*. Its holder then goes on to
+lock the rest of its basket, queuing behind other sales for `SKU-000002`, `-000003`, …, all while holding
+the hottest lock.
+
+Any fixed order prevents deadlock, so the experiment reverses it:
+`supermarket.inventory.lock-order=SKU_DESCENDING` locks `SKU-000001` last, so it is held only for its own
+update and the commit. The runs:
+
+- four stress runs, alternating ascending, descending, descending, ascending, and one default run of each
+  order, all on fresh databases;
+- each run's inventory log confirms the order it used, and no service log reported a deadlock;
+- the invariant held in every run;
+- reports in `reports/experiments/lock-order/{ascending,descending}/`.
+
+| Stress, 100 × 120 s | Ascending (default) | Descending |
+| ------------------- | ------------------- | ---------- |
+| Transactions | 8 995 / 9 062 | **10 444 / 10 128** (+14 %) |
+| COMPLETE mean | 1 135 / 1 128 ms | **306 / 317 ms** |
+| COMPLETE p99 | 4.44 / 4.50 s | **1.94 / 2.14 s** |
+| START / SCAN mean | 9.7 / 18.2 ms | 53 / 77 ms |
+| Errors | 2 timeouts / 0 | 0 / 0 |
+
+At the default load the order makes no difference: 4 869 against 4 919 transactions, because 10 stations
+never queue on that lock.
+
+`complete` got 3.6× faster, but throughput rose only 14 %, because the waiting moved on to the next limit.
+With checkout fast, 69 stations are scanning at once, and at 1.1 ms each a scan takes 77 ms. Little's law
+again: 53 + 10.5 × 77 + 311 ≈ 1 172 ms, so about 85/s, as measured. The scan path is limited by the CPU,
+and most of that is one query (next question). At about 900 scans/s it is the same ceiling that week 4
+reaches at the default load.
+
+It is not the default, for two reasons:
+
+- Week 4 would gain the same from it (it locks in the same order), so switching it on for week 5 only
+  would make the week-over-week comparison about tuning.
+- Descending SKU order means "hottest last" only because the catalog's numbering matches the load
+  client's Zipf ranking. Ordering by *measured* popularity would not be safe: the order must be the same
+  for every concurrent sale, and a ranking that moves would let two sales disagree.
+
+Other ways to shorten or avoid the hot lock, not built:
+
+- **Split the hot row.** Keep `SKU-000001`'s stock in several rows and let each sale take from one, so
+  sales of it proceed in parallel; the low-stock report sums the rows. A sale that finds its row empty
+  must try another.
+- **Lock one row at a time.** Commit each SKU's decrement on its own inside the deduct, recording each in
+  the ledger, and undo the earlier ones if a later one fails: the saga's own idea, applied inside
+  inventory. No lock is then held across a basket. The cost is that a basket's stock is taken row by row,
+  but the saga is already not isolated.
+- **Batch the hot row.** Queue the decrements for hot SKUs and apply many sales in one `UPDATE` (group
+  commit).
+
+### "2 ms per call is high? Probably lower on a distributed deployment?"
+
+Yes on both counts, as far as one laptop can show. Week 4's "about two milliseconds" was not a measurement
+of a call. It was the rise in mean START and SCAN latency from week 3 to week 4, from two different
+sessions, and SCAN had gained an insert as well. Timed on its own here, mean (p99), with a probe making one
+call at a time from its own JVM. The probe and its script are `experiments/hop-cost/`, and the results are
+in `reports/experiments/hop-cost/`. The committed run did the probe phases and the CPU check as two
+invocations; the script does both in one.
+
+| One call | Machine idle | Default load (CPU 96 % busy) | Stress (CPU 95 % busy) |
+| -------- | ------------ | ---------------------------- | ---------------------- |
+| Bare gRPC call, back to back | **0.08 ms** (0.16) | | |
+| Bare gRPC call, one per ms | 0.30 ms (1.0) | 0.43 ms (1.1) | 0.39 ms (1.3) |
+| Real `GetItem`, back to back | 0.52 ms (0.8) | | |
+| Real `GetItem`, one per ms | 1.67 ms (5.0) | 1.63 ms (4.3) | 2.00 ms (6.5) |
+
+What the rows measure:
+
+- **The bare call** goes to a dummy server that answers at once. It is everything a hop costs, and
+  nothing else: serialise, HTTP/2 over loopback, deserialise, and thread hand-offs on both sides.
+- **The real call** is the catalog service and one primary-key lookup in catalog-db.
+- **"One per ms"** lets the threads fall asleep between calls, and each call pays to wake them. For the
+  real call that includes a PostgreSQL backend inside Docker's VM, reached through Docker's port
+  forwarding.
+
+What the numbers say:
+
+- **A hop costs 0.1–0.4 ms here, not 2 ms**, and a busy machine barely changes that.
+- **The machine is CPU-bound even at the default load.** The 10 stations send requests back to back, so
+  "default" is not light: the CPU was 96 % busy at 10 stations and 95 % at 100. Under stress, Docker's VM
+  (the four databases) used about 3.6 of the 8 cores, Docker's host-side backend (which forwards every
+  database connection into the VM) about 1.1, and the JVMs most of the rest. On a CPU-bound machine,
+  extra work per request costs more than its own duration, because every request also waits for the CPU
+  behind everyone else's extra work. That is how week 4's additions per request (a gateway→service hop, a
+  second process, a `scan_log` insert) showed up as about 2 ms.
+- **Most of that CPU is one query.** At 10 stations, transaction-db alone used 1.7–2.3 cores
+  (`where-the-cpu-goes-*.txt`). In a 40 s run, `transaction_items` was read by sequential scan 35 664
+  times, 518 million rows in all: about once per scan and per complete, each of which reloads the basket's
+  lines by `tx_id`. That column has no index, deliberately, since week 1, so that every week runs the same
+  SQL. Week 4 runs the same query. The index is the obvious next fix after the lock order, and it would
+  help weeks 1–5 alike.
+- **Distributed, the cost per request would probably be lower**, as long as the hosts are close together.
+  Each service would have its own CPU, so most of the contention that dominates these numbers would go.
+  The network would add a round trip per hop, typically a few hundred microseconds within one datacenter
+  (not measured here). Far-apart hosts change that: a cross-region hop costs tens of milliseconds.
+
+Week 4's analysis, and the first version of this one, said the opposite: that a network would only *add*
+to the hop's cost measured here. For this setup that was wrong. The larger cost is sharing one CPU. (The
+probe is not free either: the stress run with it attached completed 8 553 sales with 5 timeouts, so it is
+not part of the comparison.)
 
 ## Design decisions
 
@@ -279,9 +523,10 @@ Stock rows are locked in SKU order, as in weeks 1–4 — the stable order that 
 consequence became visible this week: the hottest SKU under the Zipf workload, `SKU-000001`, also
 sorts first, so every sale that contains it — about two in three (it gets 12.2 % of scans, and a
 basket holds 1–20 of them) — takes the most contended lock *first* and holds it while it locks and
-updates the rest of its basket. Any consistent order prevents
-deadlock; ordering by descending SKU would take the hottest lock last and hold it for the shortest
-time. It was not changed, so the comparison with weeks 1–4 stays about the architecture.
+updates the rest of its basket. Any consistent order prevents deadlock, and
+`supermarket.inventory.lock-order=SKU_DESCENDING` takes the hottest lock last instead. That is the
+experiment under *Two questions from the week 4 review*: +14 % stress throughput, `complete` 3.6× faster.
+The default stays ascending, so the comparison with weeks 1–4 stays about the architecture.
 
 ### Known limitations
 
@@ -292,7 +537,8 @@ time. It was not changed, so the comparison with weeks 1–4 stays about the arc
   of a smaller margin over the 9 s stock deadline.
 - **Under stress, the saga's deadline turns the longest lock waits into errors.** Week 4 let a
   `complete` wait as long as the lock queue took; week 5 gives up on the stock step at 9 s and
-  compensates (see the results). The alternative is a longer deadline than the client's own timeout.
+  compensates: 3 of 18 524 stress completes, and none with the hottest lock taken last. The alternative is
+  a longer deadline than the client's own timeout.
 - **The orchestrator's database is a single point of failure for checkout.** The saga state lives in
   transaction-db by design; if that database is down, nothing can be started, scanned or completed.
 - **The outbox and the ledger grow without bound** (`scan_events`, `sales`, `sale_lines`). Both need
@@ -300,7 +546,8 @@ time. It was not changed, so the comparison with weeks 1–4 stays about the arc
 - **The caches assume an immutable catalog** (see *Data ownership*).
 - **The settle delay compares two services' clocks.** On separate hosts, skew would eat into it; a
   commit-ordered feed (logical replication, or a broker fed by a relay) would remove the heuristic.
-- **Everything is on one machine.** Every hop is loopback, so the cost of the extra calls measured
-  here is a floor; a real network adds to every one of them.
+- **Everything is on one machine, and its CPU is saturated at both loads.** Per-request costs here are
+  mostly contention for the CPU, not the calls themselves (0.1–0.4 ms each; see *"2 ms per call is high?"*).
+  On separate hosts most of that contention would go, and each hop would add a network round trip.
 - **The gateway is still a single point of failure**, with no service discovery, TLS,
   authentication or retries — single-machine coursework, as in week 4.

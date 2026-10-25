@@ -10,8 +10,12 @@
 #   ./fault-injection.sh catalog-service       the item cache must carry checkout
 #
 # Env: STATIONS (10), DURATION (60), KILL_AT (20), DOWN_FOR (15) — seconds.
-# Writes reports/fault-injection/<service>-<time>.txt (timeline, client report, invariant) and
-# the client's JSON report beside it.
+# Writes reports/fault-injection/<service>-<time>.txt (timeline, time to recover, client report,
+# invariant) and the client's JSON report beside it.
+#
+# "Time to recover" is from the restarted service being up (port open, startup finished) to the
+# first request through the gateway that needs it succeeding: for inventory and transaction a full
+# checkout (start, scan, complete -> 200), which also exercises the saga's call to inventory.
 set -euo pipefail
 cd "$(dirname "$0")"
 victim=${1:?usage: $0 catalog-service|transaction-service|inventory-service|analytics-service}
@@ -33,6 +37,23 @@ esac
 mkdir -p reports/fault-injection
 out="reports/fault-injection/$victim-$(date +%Y%m%d-%H%M%S).txt"
 note() { echo "$(date +%T) $*" | tee -a "$out"; }
+now() { python3 -c 'import time; print(time.time())'; }
+
+checkout() { # one full checkout through the gateway; prints the complete's HTTP status
+  local tx
+  tx=$(curl -s -XPOST localhost:8080/transactions -H 'Content-Type: application/json' -d '{"stationId":"probe"}' \
+       | sed -n 's/.*"transactionId":"\([^"]*\)".*/\1/p')
+  [ -n "$tx" ] || { echo 000; return; }
+  curl -s -o /dev/null -XPOST "localhost:8080/transactions/$tx/items" -H 'Content-Type: application/json' -d '{"sku":"SKU-000500"}'
+  curl -s -o /dev/null -w '%{http_code}' -XPOST "localhost:8080/transactions/$tx/complete"
+}
+
+recovered() { # does the path through the gateway that needs the victim work again?
+  case "$victim" in
+    inventory-service|transaction-service) [ "$(checkout)" = 200 ] ;;
+    *) [ "$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080$probe")" = 200 ] ;;
+  esac
+}
 
 note "load: $STATIONS stations x ${DURATION}s; kill -9 $victim at +${KILL_AT}s, restart after ${DOWN_FOR}s"
 (cd ../load-client && ./run.sh --baseUrl=http://localhost:8080 --stations="$STATIONS" --duration="$DURATION" \
@@ -48,6 +69,9 @@ note "GET $probe -> HTTP $(curl -s -o /dev/null -w '%{http_code}' "http://localh
 sleep $((DOWN_FOR - 1))
 note "restarting $victim"
 ./run-local.sh "$victim" | sed 's/^/    /' | tee -a "$out"
+up=$(now)
+for _ in $(seq 1 300); do recovered && break; sleep 0.1; done
+note "$(python3 -c "print('time to recover: %.1f s after $victim was up' % ($(now) - $up))")"
 note "GET $probe -> HTTP $(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080$probe")"
 
 wait "$client" || true

@@ -1,0 +1,51 @@
+00:45:07 load: 10 stations x 60s; kill -9 catalog-service at +20s, restart after 15s
+00:45:27 killed catalog-service
+00:45:28 GET /items -> HTTP 503
+00:45:42 restarting catalog-service
+    catalog-service up on :9101 (pid 94995)
+    [catalog-service] [           main] c.s.catalog.DefaultCatalogService        : Catalog already seeded (2000 items); skipping initialization.
+00:45:45 time to recover: 0.2 s after catalog-service was up
+00:45:45 GET /items -> HTTP 200
+00:46:08 load finished
+================ LOAD TEST REPORT ================
+Base URL:        http://localhost:8080
+Stations:        10
+Duration:        60.1s (requested 60s)
+Transactions:    4748 (79.0/sec)
+Items scanned:   49869 (829.5/sec)
+
+Operation                    OK   Errors   Mean(ms)    P50(ms)    P95(ms)    P99(ms)    Max(ms)     Err%
+START_TRANSACTION          4748        0       4.05       3.27       7.11      13.23     136.75    0.00%
+SCAN_ITEM                 49869        0       7.92       7.24      13.04      19.70      71.00    0.00%
+COMPLETE_TRANSACTION       4748        0      39.24      32.20      89.07     158.77     271.12    0.00%
+
+Low-stock alerts (0):
+  (none)
+
+Most popular items (top 10):
+  #1   SKU-000001   Item 1                         scans=113
+  #2   SKU-000002   Item 2                         scans=61
+  #3   SKU-000003   Item 3                         scans=44
+  #4   SKU-000004   Item 4                         scans=32
+  #5   SKU-000006   Item 6                         scans=31
+  #6   SKU-000005   Item 5                         scans=26
+  #7   SKU-000008   Item 8                         scans=23
+  #8   SKU-000009   Item 9                         scans=20
+  #9   SKU-000011   Item 11                        scans=16
+  #10  SKU-000007   Item 7                         scans=14
+===================================================
+
+JSON report written to: /Users/home/Developer/CS6510-2026/load-client/../week5-microservices/reports/fault-injection/report-20261025-004607.json
+00:46:08 sagas in flight: 0
+units sold (transaction-db, COMPLETED)       49869
+units decremented (inventory-db)             49869
+demand beyond supply (floored at 0)          0
+                                             
+lost_update_bugs                             0
+ledger_mismatches                            0
+sold_vs_requested_mismatches                 0
+negative_stock_rows                          0
+completed_tx_without_applied_sale            0
+applied_sale_without_completed_tx            0
+sagas_in_flight                              0
+invariant holds

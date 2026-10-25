@@ -11,9 +11,11 @@ import java.time.Duration;
  * @param initialStock      units per SKU when the stock table is first seeded (was the
  *                          catalog's {@code stock-per-item} in weeks 1–4)
  * @param seedTimeout       how long to wait for the catalog service when seeding
+ * @param lockOrder         the order a sale locks its stock rows in; {@code SKU_ASCENDING}
+ *                          as in weeks 1–4, unless running the lock-order experiment
  */
 @ConfigurationProperties(prefix = "supermarket.inventory")
-public record InventoryProperties(int lowStockThreshold, int initialStock, Duration seedTimeout) {
+public record InventoryProperties(int lowStockThreshold, int initialStock, Duration seedTimeout, LockOrder lockOrder) {
 
     public InventoryProperties {
         if (lowStockThreshold <= 0) {
@@ -24,6 +26,9 @@ public record InventoryProperties(int lowStockThreshold, int initialStock, Durat
         }
         if (seedTimeout == null || seedTimeout.isNegative() || seedTimeout.isZero()) {
             seedTimeout = Duration.ofMinutes(2);
+        }
+        if (lockOrder == null) {
+            lockOrder = LockOrder.SKU_ASCENDING;
         }
     }
 }

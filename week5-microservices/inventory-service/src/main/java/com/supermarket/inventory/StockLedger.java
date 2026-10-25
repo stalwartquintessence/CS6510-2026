@@ -8,6 +8,9 @@ import com.supermarket.inventory.model.SaleStatus;
 import com.supermarket.inventory.persistence.SaleDao;
 import com.supermarket.inventory.persistence.StockDao;
 import com.supermarket.support.error.InvalidRequestException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,18 +32,29 @@ import java.util.List;
  * <p>The check and the decrement stay one atomic step, inside this service, under the
  * same SKU-ordered {@code SELECT … FOR UPDATE} as weeks 1–4: nothing outside reads
  * stock and then writes it back, so two stations still cannot both take the last unit.
- * Lock order is always the sale row first, then stock rows by SKU, in both methods,
- * so a deduct and a restore can never deadlock each other.
+ * Lock order is always the sale row first, then stock rows in the configured
+ * {@link LockOrder} (ascending SKU unless an experiment says otherwise), in both
+ * methods, so no two sales, and no deduct and restore, can ever deadlock each other.
  */
 @Component
 public class StockLedger {
 
+    private static final Logger log = LoggerFactory.getLogger(StockLedger.class);
+
     private final StockDao stockDao;
     private final SaleDao saleDao;
+    private final Comparator<String> lockOrder;
 
-    public StockLedger(StockDao stockDao, SaleDao saleDao) {
+    @Autowired
+    public StockLedger(StockDao stockDao, SaleDao saleDao, InventoryProperties properties) {
+        this(stockDao, saleDao, properties.lockOrder());
+        log.info("Stock rows are locked in {} order", properties.lockOrder());
+    }
+
+    public StockLedger(StockDao stockDao, SaleDao saleDao, LockOrder lockOrder) {
         this.stockDao = stockDao;
         this.saleDao = saleDao;
+        this.lockOrder = lockOrder.skus();
     }
 
     /**
@@ -63,10 +77,10 @@ public class StockLedger {
                     : DeductOutcome.applied(saleId, known.lines());
         }
 
-        // Lock and decrement in a deterministic SKU order so two concurrent sales
+        // Lock and decrement in one fixed SKU order so two concurrent sales
         // touching the same pair of SKUs cannot deadlock.
         List<RequestedLine> ordered = new ArrayList<>(lines);
-        ordered.sort(Comparator.comparing(RequestedLine::sku));
+        ordered.sort(Comparator.comparing(RequestedLine::sku, lockOrder));
         List<SaleLine> taken = new ArrayList<>(ordered.size());
         for (RequestedLine line : ordered) {
             taken.add(new SaleLine(line.sku(), line.quantity(), stockDao.decrementForUpdate(line.sku(), line.quantity())));
@@ -94,8 +108,10 @@ public class StockLedger {
         if (sale.status() == SaleStatus.REVERTED) {
             return 0;
         }
+        List<SaleLine> ordered = new ArrayList<>(sale.lines());
+        ordered.sort(Comparator.comparing(SaleLine::sku, lockOrder));   // the same order deduct locks in
         int units = 0;
-        for (SaleLine line : sale.lines()) {   // SKU order, as stored
+        for (SaleLine line : ordered) {
             if (line.applied() > 0) {
                 stockDao.incrementForUpdate(line.sku(), line.applied());
                 units += line.applied();

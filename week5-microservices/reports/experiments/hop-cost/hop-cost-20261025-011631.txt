@@ -1,0 +1,40 @@
+01:16:31 machine: MacBookPro18,3 8 cores; Now drawing from 'AC Power'
+01:16:31 probe: one call at a time from its own JVM; 'paced' = 1 ms pause between calls, 'back-to-back' = none
+01:16:32 ### warm-up: 10 stations x 30 s, discarded (Docker was just started)
+Transactions:    2326 (77.3/sec)
+01:17:24 ### IDLE (all services up, no load)
+01:17:55 cpu idle: CPU usage: 7.92% user, 4.47% sys, 87.60% idle 
+idle   dummy   back-to-back              n= 121898  mean  0.082  p50  0.076  p90  0.105  p99  0.162  p99.9   0.294  max   7.321 ms
+idle   dummy   paced                     n=   9537  mean  0.300  p50  0.266  p90  0.409  p99  1.019  p99.9   3.321  max  11.572 ms
+idle   catalog back-to-back              n=  19290  mean  0.518  p50  0.501  p90  0.587  p99  0.806  p99.9   1.665  max   5.847 ms
+idle   catalog paced                     n=   5112  mean  1.674  p50  1.553  p90  2.475  p99  4.978  p99.9   9.238  max  29.154 ms
+01:19:21 ### NORMAL load (10 stations x 90 s)
+01:19:38 cpu normal: CPU usage: 65.81% user, 30.38% sys, 3.80% idle 
+normal dummy   paced                     n=  12341  mean  0.429  p50  0.384  p90  0.621  p99  1.116  p99.9   3.588  max  20.250 ms
+normal catalog paced                     n=   7168  mean  1.627  p50  1.473  p90  2.312  p99  4.269  p99.9   6.558  max  22.055 ms
+Transactions:    6469 (71.8/sec)
+START_TRANSACTION          6469        0       4.23       3.56       6.95      11.85     144.17    0.00%
+SCAN_ITEM                 68045        0       9.02       8.40      14.39      20.93      72.01    0.00%
+COMPLETE_TRANSACTION       6469        0      40.06      34.19      83.60     129.49     336.42    0.00%
+invariant holds
+01:20:52 ### STRESS load (100 stations x 120 s)
+01:21:43 cpu stress: CPU usage: 63.68% user, 31.60% sys, 4.71% idle 
+COMMAND          %CPU 
+com.apple.Virtua 359.5
+com.docker.backe 109.3
+java             81.4 
+java             38.2 
+kernel_task      32.2 
+java             30.0 
+java             28.0 
+mediaanalysisd   22.0 
+Code Helper (Ren 6.2  
+WindowServer     4.8  
+stress dummy   paced                     n=  15940  mean  0.390  p50  0.321  p90  0.663  p99  1.272  p99.9   2.531  max  12.957 ms
+stress catalog paced                     n=   7891  mean  1.997  p50  1.661  p90  3.427  p99  6.547  p99.9  14.042  max  27.618 ms
+Transactions:    8553 (70.9/sec)
+START_TRANSACTION          8558        0       9.87       4.88      15.73     200.49     447.07    0.00%
+SCAN_ITEM                 89896        0      17.23      11.63      41.97     108.66     394.21    0.00%
+COMPLETE_TRANSACTION       8553        5    1210.40     875.48    3081.24    4726.37    7771.61    0.06%
+invariant holds
+01:23:25 === done; written to /Users/home/Developer/CS6510-2026/week5-microservices/reports/experiments/hop-cost/hop-cost-20261025-011631.txt

@@ -240,7 +240,7 @@ docker compose up -d --wait     # four PostgreSQL servers, host ports 5436 catal
 ./run-local.sh                  # all five JVMs in dependency order; ./run-local.sh <service> (re)starts one
 ./verify-invariant.sh           # the correctness invariant, joined across transaction-db and inventory-db
 ./fault-injection.sh <service>  # load + kill -9 one service mid-run + restart + recovery wait + invariant
-./mvnw test                     # 39 tests: saga, ledger, feed, pipeline, ArchUnit call graph, db-per-service config
+./mvnw test                     # 40 tests: saga, ledger, feed, pipeline, ArchUnit call graph, db-per-service config
 ```
 
 - Each service has its own `persistence` package and `db/<service>.sql`; `contracts` (proto) and
@@ -255,6 +255,10 @@ docker compose up -d --wait     # four PostgreSQL servers, host ports 5436 catal
   weeks 1–4 SKU-sorted `SELECT … FOR UPDATE`, floored at 0. Deadlines: gateway 10 s, deduct 9 s, restore 5 s.
 - Tuning: transaction *and* inventory get 200 gRPC threads / Hikari 50 (inventory now holds the hot row
   locks); catalog/analytics small.
+- `supermarket.inventory.lock-order` (`SKU_ASCENDING` default, as weeks 1–4; `SKU_DESCENDING` takes the hottest
+  row last) exists for the lock-order experiment. Keep the default for week-over-week comparisons; experiment
+  runs go in `reports/experiments/`, apart from the main reports. Override per run with
+  `JAVA_OPTS=-Dsupermarket.inventory.lock-order=SKU_DESCENDING ./run-local.sh`.
 - Between measured runs: `./stop-local.sh && docker compose down -v`, then `up -d --wait` and `./run-local.sh`.
   Week 5's `run-local.sh` refuses to start a service whose port is taken — week 4's does not, and if another
   week's services still hold 8080/9101–9104 its `wait_for_port` passes and the load client silently drives

@@ -30,7 +30,7 @@ class StockLedgerTest {
 
     private final FakeStock stock = new FakeStock(Map.of("SKU-A", 10, "SKU-B", 5, "SKU-C", 2));
     private final FakeSales sales = new FakeSales();
-    private final StockLedger ledger = new StockLedger(stock, sales);
+    private final StockLedger ledger = new StockLedger(stock, sales, LockOrder.SKU_ASCENDING);
 
     @Test
     void deductTakesTheStockOnceHoweverOftenItIsRepeated() {
@@ -86,6 +86,18 @@ class StockLedgerTest {
                 new RequestedLine("SKU-C", 1), new RequestedLine("SKU-A", 1), new RequestedLine("SKU-B", 1)));
 
         assertEquals(List.of("SKU-A", "SKU-B", "SKU-C"), stock.lockOrder);
+    }
+
+    @Test
+    void theDescendingExperimentLocksInReverseForDeductAndRestoreAlike() {
+        StockLedger descending = new StockLedger(stock, sales, LockOrder.SKU_DESCENDING);
+        descending.deduct("tx-1/1", List.of(
+                new RequestedLine("SKU-A", 1), new RequestedLine("SKU-C", 1), new RequestedLine("SKU-B", 1)));
+        descending.restore("tx-1/1");
+
+        assertEquals(List.of("SKU-C", "SKU-B", "SKU-A", "SKU-C", "SKU-B", "SKU-A"), stock.lockOrder,
+                "a restore must lock in the same order as the deduct, or the two could deadlock");
+        assertEquals(10, stock.of("SKU-A"));
     }
 
     private static final class FakeStock implements StockDao {

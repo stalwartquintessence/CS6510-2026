@@ -1,0 +1,50 @@
+00:43:40 load: 10 stations x 60s; kill -9 analytics-service at +20s, restart after 15s
+00:44:00 killed analytics-service
+00:44:01 GET /analytics/popular-items -> HTTP 503
+00:44:15 restarting analytics-service
+    analytics-service up on :9104 (pid 94396)
+00:44:18 time to recover: 0.2 s after analytics-service was up
+00:44:19 GET /analytics/popular-items -> HTTP 200
+00:44:41 load finished
+================ LOAD TEST REPORT ================
+Base URL:        http://localhost:8080
+Stations:        10
+Duration:        60.1s (requested 60s)
+Transactions:    4606 (76.6/sec)
+Items scanned:   48584 (808.2/sec)
+
+Operation                    OK   Errors   Mean(ms)    P50(ms)    P95(ms)    P99(ms)    Max(ms)     Err%
+START_TRANSACTION          4606        0       4.25       3.33       7.76      13.26     134.18    0.00%
+SCAN_ITEM                 48584        0       8.08       7.26      13.46      20.76     141.20    0.00%
+COMPLETE_TRANSACTION       4606        0      40.92      33.17      96.33     162.38     404.35    0.00%
+
+Low-stock alerts (0):
+  (none)
+
+Most popular items (top 10):
+  #1   SKU-000001   Item 1                         scans=130
+  #2   SKU-000002   Item 2                         scans=60
+  #3   SKU-000003   Item 3                         scans=33
+  #4   SKU-000004   Item 4                         scans=31
+  #5   SKU-000005   Item 5                         scans=29
+  #6   SKU-000006   Item 6                         scans=21
+  #7   SKU-000010   Item 10                        scans=14
+  #8   SKU-000007   Item 7                         scans=12
+  #9   SKU-000024   Item 24                        scans=12
+  #10  SKU-000008   Item 8                         scans=11
+===================================================
+
+JSON report written to: /Users/home/Developer/CS6510-2026/load-client/../week5-microservices/reports/fault-injection/report-20261025-004441.json
+00:44:41 sagas in flight: 0
+units sold (transaction-db, COMPLETED)       48584
+units decremented (inventory-db)             48584
+demand beyond supply (floored at 0)          0
+                                             
+lost_update_bugs                             0
+ledger_mismatches                            0
+sold_vs_requested_mismatches                 0
+negative_stock_rows                          0
+completed_tx_without_applied_sale            0
+applied_sale_without_completed_tx            0
+sagas_in_flight                              0
+invariant holds

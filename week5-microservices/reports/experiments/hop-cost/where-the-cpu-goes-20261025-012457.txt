@@ -1,0 +1,26 @@
+10 stations x 40 s, fresh databases; docker stats sampled at +20 s and +30 s
+NAME                               CPU %
+supermarket-week5-analytics-db     1.03%
+supermarket-week5-inventory-db     19.10%
+supermarket-week5-catalog-db       0.07%
+supermarket-week5-transaction-db   171.36%
+NAME                               CPU %
+supermarket-week5-analytics-db     0.64%
+supermarket-week5-inventory-db     18.19%
+supermarket-week5-catalog-db       0.08%
+supermarket-week5-transaction-db   234.81%
+Transactions:    3112 (77.6/sec)
+SCAN_ITEM                 32833        0       7.65       6.74      13.45      22.48      74.47    0.00%
+      relname      | seq_scan | seq_tup_read | idx_scan | n_live_tup 
+-------------------+----------+--------------+----------+------------
+ transaction_items |    35664 |    518060008 |    32578 |      29199
+ scan_events       |       98 |       127780 |      706 |      32868
+ transactions      |        2 |            0 |   135487 |       3113
+(3 rows)
+
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Seq Scan on transaction_items  (cost=0.00..799.55 rows=8 width=79)
+   Filter: ((tx_id)::text = 'x'::text)
+(2 rows)
+

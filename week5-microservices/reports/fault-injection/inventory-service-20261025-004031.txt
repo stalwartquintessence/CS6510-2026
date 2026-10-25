@@ -1,0 +1,58 @@
+00:40:31 load: 10 stations x 60s; kill -9 inventory-service at +20s, restart after 15s
+00:40:51 killed inventory-service
+00:40:52 GET /inventory/low-stock -> HTTP 503
+00:41:06 restarting inventory-service
+    inventory-service up on :9103 (pid 93113)
+    [inventory-service] [           main] com.supermarket.inventory.StockSeeder    : Stock already seeded (2000 items); skipping initialization.
+00:41:10 time to recover: 0.1 s after inventory-service was up
+00:41:10 GET /inventory/low-stock -> HTTP 200
+00:41:32 load finished
+================ LOAD TEST REPORT ================
+Base URL:        http://localhost:8080
+Stations:        10
+Duration:        60.1s (requested 60s)
+Transactions:    3042 (50.6/sec)
+Items scanned:   50741 (843.8/sec)
+
+Operation                    OK   Errors   Mean(ms)    P50(ms)    P95(ms)    P99(ms)    Max(ms)     Err%
+START_TRANSACTION          4879        0       4.46       3.64       7.98      13.16     137.36    0.00%
+SCAN_ITEM                 50741        0       8.43       7.62      14.21      20.32      67.58    0.00%
+COMPLETE_TRANSACTION       3042     1837      43.75      35.59     101.45     161.62     362.00   37.65%
+
+Low-stock alerts (0):
+  (none)
+
+Most popular items (top 10):
+  #1   SKU-000001   Item 1                         scans=132
+  #2   SKU-000002   Item 2                         scans=63
+  #3   SKU-000003   Item 3                         scans=40
+  #4   SKU-000005   Item 5                         scans=32
+  #5   SKU-000004   Item 4                         scans=25
+  #6   SKU-000006   Item 6                         scans=23
+  #7   SKU-000008   Item 8                         scans=20
+  #8   SKU-000007   Item 7                         scans=15
+  #9   SKU-000010   Item 10                        scans=14
+  #10  SKU-000014   Item 14                        scans=12
+===================================================
+
+JSON report written to: /Users/home/Developer/CS6510-2026/load-client/../week5-microservices/reports/fault-injection/report-20261025-004132.json
+00:41:32 sagas in flight: 1106
+00:41:38 sagas in flight: 791
+00:41:43 sagas in flight: 130
+00:41:48 sagas in flight: 0
+    recovery: Recovered 301 stuck checkout saga(s)
+    recovery: Recovered 744 stuck checkout saga(s)
+    recovery: Recovered 661 stuck checkout saga(s)
+    recovery: Recovered 130 stuck checkout saga(s)
+units sold (transaction-db, COMPLETED)       31169
+units decremented (inventory-db)             31169
+demand beyond supply (floored at 0)          0
+                                             
+lost_update_bugs                             0
+ledger_mismatches                            0
+sold_vs_requested_mismatches                 0
+negative_stock_rows                          0
+completed_tx_without_applied_sale            0
+applied_sale_without_completed_tx            0
+sagas_in_flight                              0
+invariant holds
